@@ -1,0 +1,354 @@
+<!DOCTYPE html> 
+<html>
+<head>
+    <title>Sudoku with Advanced Features</title>
+    <style>
+        /* ... (Same CSS as before) ... */
+
+        .sudoku-grid {
+            margin: 20px auto;
+            border-collapse: collapse;
+        }
+        
+        .cell {
+            width: 40px;
+            height: 40px;
+            border: 1px solid gray;
+            position: relative;
+        }
+        
+        .cell input {
+            width: 90%;
+            height: 90%;
+            border: none;
+            text-align: center;
+            font-size: 16px;
+        }
+        
+        .single-possibility {
+            position: absolute;
+            top: 2px;
+            left: 2px;
+            font-size: 12px;
+            color: #2ecc71;
+        }
+        
+        .pair-first {
+            position: absolute;
+            top: 2px;
+            right: 2px;
+            font-size: 12px;
+            color: #3498db;
+        }
+
+        .pair-second {
+            position: absolute;
+            bottom: 2px;
+            right: 2px;
+            font-size: 12px;
+            color: #3498db;
+        }
+        
+        .cell:nth-child(3n) {
+            border-right: 2px solid black;
+        }
+        
+        tr:nth-child(3n) td {
+            border-bottom: 2px solid black;
+        }
+        
+        .hint-popup {
+            position: absolute;
+            background: white;
+            padding: 10px;
+            display: none;
+            z-index: 1000;
+            box-shadow: 0 0 10px rgba(0,0,0,0.5);
+            border: 1px solid #ccc;
+            border-radius: 4px;
+        }
+
+        /* Styles for hidden singles */
+        .hidden-single {
+            background-color: #fff3cd; /* Light yellow background */
+            border: 2px solid #ffeeba; /* Slightly darker border */
+        }
+    </style>
+</head>
+<body>
+    <button onclick="copyGrid()">Copy Grid</button>
+    <div id="hint-popup" class="hint-popup"></div>
+    <script>
+        // Create the grid dynamically
+        const grid = document.createElement('table');
+        grid.className = 'sudoku-grid';
+        document.body.appendChild(grid);
+
+        // Create the 9x9 grid of cells
+        for (let i = 0; i < 9; i++) {
+            const row = document.createElement('tr');
+            for (let j = 0; j < 9; j++) {
+                const cell = document.createElement('td');
+                cell.className = 'cell';
+
+                // Create input element for the cell
+                const input = document.createElement('input');
+                input.type = 'text';
+                input.maxLength = 1;
+                input.dataset.row = i;
+                input.dataset.col = j;
+                
+                // Create spans for displaying possible values
+                const singleSpan = document.createElement('span');
+                singleSpan.className = 'single-possibility';
+                
+                const pairFirstSpan = document.createElement('span');
+                pairFirstSpan.className = 'pair-first';
+                
+                const pairSecondSpan = document.createElement('span');
+                pairSecondSpan.className = 'pair-second';
+                
+                // Append the spans to the cell
+                cell.appendChild(singleSpan);
+                cell.appendChild(pairFirstSpan);
+                cell.appendChild(pairSecondSpan);
+                
+                // Add event listeners to the input
+                input.addEventListener('input', (e) => {
+                    // Ensure only numbers 1-9 are entered
+                    e.target.value = e.target.value.replace(/[^1-9]/g, '');
+                    updateAllPossibilities(); // Update possibilities whenever input changes
+                });
+
+                input.addEventListener('contextmenu', showHint); // Show hint on right-click
+                
+                // Append the input to the cell, and the cell to the row
+                cell.appendChild(input);
+                row.appendChild(cell);
+            }
+            // Append the row to the grid
+            grid.appendChild(row);
+        }
+
+        // Add paste event listener to document to allow pasting grids
+        document.addEventListener('paste', (e) => {
+            e.preventDefault();
+            const text = e.clipboardData.getData('text');
+            const lines = text.split('\n').filter(line => line.trim());
+            
+            if (lines.length === 9) {
+                // Clear existing inputs
+                document.querySelectorAll('input').forEach(input => {
+                    input.value = '';
+                });
+                
+                // Parse and set the values from the pasted text
+                lines.forEach((line, row) => {
+                    const numbers = line.trim().split(/\s+/);
+                    if (numbers.length === 9) {
+                        numbers.forEach((num, col) => {
+                            if (num !== '0' && num !== '.') {
+                                const input = document.querySelector(`input[data-row="${row}"][data-col="${col}"]`);
+                                input.value = num;
+                            }
+                        });
+                    }
+                });
+                updateAllPossibilities(); // Update possibilities after pasting
+            }
+        });
+
+        // Function to update possible values and find hidden singles
+        function updateAllPossibilities() {
+            // Clear all possibility displays
+            document.querySelectorAll('.single-possibility, .pair-first, .pair-second').forEach(span => {
+                span.textContent = '';
+            });
+
+            // Remove hidden-single classes from all inputs
+            document.querySelectorAll('.hidden-single').forEach(input => {
+                input.classList.remove('hidden-single');
+            });
+
+            // Map to store possible values for each empty cell
+            const possibleValuesMap = new Map();
+
+            // Data structures to count occurrences of possible numbers in rows, columns, and boxes
+            const rows = Array.from({ length: 9 }, () => ({})); // Array of 9 objects for rows
+            const cols = Array.from({ length: 9 }, () => ({})); // Array of 9 objects for columns
+            const boxes = Array.from({ length: 9 }, () => ({})); // Array of 9 objects for boxes
+
+            // Iterate over each cell to compute possible values and update counts
+            for (let row = 0; row < 9; row++) {
+                for (let col = 0; col < 9; col++) {
+                    const input = document.querySelector(`input[data-row="${row}"][data-col="${col}"]`);
+                    if (!input.value) { // If the cell is empty
+                        const possibilities = findPossibleValues(row, col); // Find possible values for this cell
+                        possibleValuesMap.set(`${row},${col}`, possibilities); // Store in the map
+
+                        // Calculate box index for the cell
+                        const boxIndex = Math.floor(row / 3) * 3 + Math.floor(col / 3);
+
+                        // Update counts for hidden singles
+                        possibilities.forEach(num => {
+                            // Count occurrences in row
+                            if (rows[row][num]) {
+                                rows[row][num].push(`${row},${col}`);
+                            } else {
+                                rows[row][num] = [`${row},${col}`];
+                            }
+                            // Count occurrences in column
+                            if (cols[col][num]) {
+                                cols[col][num].push(`${row},${col}`);
+                            } else {
+                                cols[col][num] = [`${row},${col}`];
+                            }
+                            // Count occurrences in box
+                            if (boxes[boxIndex][num]) {
+                                boxes[boxIndex][num].push(`${row},${col}`);
+                            } else {
+                                boxes[boxIndex][num] = [`${row},${col}`];
+                            }
+                        });
+                    }
+                }
+            }
+
+            // Update the UI based on possible values
+            possibleValuesMap.forEach((possibilities, key) => {
+                const [row, col] = key.split(',').map(Number);
+                const cell = document.querySelector(`input[data-row="${row}"][data-col="${col}"]`).parentNode;
+                
+                if (possibilities.length === 1) {
+                    // If only one possibility, display it in the cell
+                    cell.querySelector('.single-possibility').textContent = possibilities[0];
+                } else if (possibilities.length === 2) {
+                    // If two possibilities, display them as pairs
+                    cell.querySelector('.pair-first').textContent = possibilities[0];
+                    cell.querySelector('.pair-second').textContent = possibilities[1];
+                }
+                // For more than two possibilities, we don't display them to avoid clutter
+            });
+
+            // Identify hidden singles by analyzing counts
+            [rows, cols, boxes].forEach((units) => {
+                units.forEach((unit) => {
+                    Object.entries(unit).forEach(([num, cells]) => {
+                        if (cells.length === 1) {
+                            // If a number appears only once in the unit, it's a hidden single
+                            const [row, col] = cells[0].split(',').map(Number);
+                            const input = document.querySelector(`input[data-row="${row}"][data-col="${col}"]`);
+                            const cellElement = input.parentNode;
+                            cellElement.querySelector('.single-possibility').textContent = num; // Display the hidden single
+                            input.classList.add('hidden-single'); // Highlight the cell
+                        }
+                    });
+                });
+            });
+        }
+
+        // Function to copy the grid to clipboard
+        function copyGrid() {
+            let text = '';
+            for (let i = 0; i < 9; i++) {
+                for (let j = 0; j < 9; j++) {
+                    const input = document.querySelector(`input[data-row="${i}"][data-col="${j}"]`);
+                    text += (input.value || '0') + ' ';
+                }
+                text = text.trim() + '\n';
+            }
+            navigator.clipboard.writeText(text).then(() => {
+                alert('Grid copied to clipboard!');
+            });
+        }
+
+        // Function to get the current grid values as a 2D array
+        function getGridValues() {
+            const values = Array(9).fill().map(() => Array(9).fill(0));
+            const inputs = document.querySelectorAll('input');
+            inputs.forEach(input => {
+                const row = parseInt(input.dataset.row);
+                const col = parseInt(input.dataset.col);
+                values[row][col] = parseInt(input.value) || 0;
+            });
+            return values;
+        }
+
+        // Function to analyze constraints for a cell (numbers already present in its row, column, and box)
+        function analyzeConstraints(row, col) {
+            const grid = getGridValues();
+            const constraints = {
+                row: new Set(),
+                column: new Set(),
+                box: new Set()
+            };
+            
+            // Check the row and column for existing numbers
+            for (let i = 0; i < 9; i++) {
+                if (grid[row][i]) constraints.row.add(grid[row][i]);
+                if (grid[i][col]) constraints.column.add(grid[i][col]);
+            }
+            
+            // Check the 3x3 box for existing numbers
+            const boxRow = Math.floor(row / 3) * 3;
+            const boxCol = Math.floor(col / 3) * 3;
+            for (let i = 0; i < 3; i++) {
+                for (let j = 0; j < 3; j++) {
+                    if (grid[boxRow + i][boxCol + j]) {
+                        constraints.box.add(grid[boxRow + i][boxCol + j]);
+                    }
+                }
+            }
+            
+            return constraints;
+        }
+
+        // Function to find possible values for a cell based on its constraints
+        function findPossibleValues(row, col) {
+            const constraints = analyzeConstraints(row, col);
+            const allNumbers = new Set([1, 2, 3, 4, 5, 6, 7, 8, 9]);
+            const impossibleNumbers = new Set([...constraints.row, ...constraints.column, ...constraints.box]);
+            // Possible numbers are those not in the constraints
+            return [...allNumbers].filter(num => !impossibleNumbers.has(num));
+        }
+
+        // Function to generate a hint message for a cell
+        function generateHintMessage(row, col) {
+            const constraints = analyzeConstraints(row, col);
+            const allNumbers = new Set([1, 2, 3, 4, 5, 6, 7, 8, 9]);
+            const impossibleNumbers = new Set([...constraints.row, ...constraints.column, ...constraints.box]);
+            const possibleNumbers = [...allNumbers].filter(num => !impossibleNumbers.has(num));
+            
+            let message = 'Possibilities: ' + possibleNumbers.sort((a, b) => a - b).join(', ');
+            return message;
+        }
+
+        // Function to show hint popup when right-clicking on a cell
+        function showHint(e) {
+            e.preventDefault();
+            const hintPopup = document.getElementById('hint-popup');
+            const input = e.target;
+            
+            if (input.value) {
+                hintPopup.style.display = 'none';
+                return;
+            }
+            
+            const row = parseInt(input.dataset.row);
+            const col = parseInt(input.dataset.col);
+            
+            hintPopup.innerHTML = generateHintMessage(row, col);
+            hintPopup.style.display = 'block';
+            
+            const rect = input.getBoundingClientRect();
+            hintPopup.style.left = `${rect.left + window.scrollX + 45}px`;
+            hintPopup.style.top = `${rect.top + window.scrollY - 10}px`;
+        }
+
+        // Hide the hint popup when clicking elsewhere
+        document.addEventListener('click', () => {
+            document.getElementById('hint-popup').style.display = 'none';
+        });
+    </script>
+</body>
+</html>
